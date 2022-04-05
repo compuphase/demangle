@@ -17,31 +17,38 @@
 #include <assert.h>
 #include <alloca.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "demangle.h"
 
+#if defined _MSC_VER
+  #define alloca(a)   _alloca(a)
+#endif
+
 #define sizearray(a)        (sizeof(a) / sizeof((a)[0]))
-#define MAX_SUBSTITUTIONS   20
-#define MAX_TEMPLATE_SUBST  10
+#define MAX_SUBSTITUTIONS   32
+#define MAX_TEMPLATE_SUBST  16
 #define MAX_FUNC_NESTING    5
 
 struct mangle {
-  int valid;            /**< whether the mangled name is valid */
   char *plain;          /**< [output] demangled name */
   size_t size;          /**< size (in characters) of the "plain" buffer */
   const char *mangled;  /**< [input] mangled name */
   const char *mpos;     /**< current position, look-ahead pointer */
+  bool valid;           /**< whether the mangled name is valid */
+  bool is_typecast_op;  /**< whether this a typecast operator */
   short nest;           /**< nesting level for names */
-  unsigned char is_typecast_op; /**< flag: is this a typecast operator */
-  char qualifiers[8];   /**< const, reference, and others */
   short func_nest;      /**< function nesting level (of parameter lists) */
+  char qualifiers[8];   /**< const, reference, and others */
   char *parameter_base[MAX_FUNC_NESTING];
   char *substitions[MAX_SUBSTITUTIONS];
   size_t subst_count;
-  char *tpl_subst[MAX_TEMPLATE_SUBST];
+  char *tpl_subst[MAX_TEMPLATE_SUBST];  /* lookup table */
   size_t tpl_subst_count;
+  char *tpl_work[MAX_TEMPLATE_SUBST];   /* work table, while parsing a template */
+  size_t tpl_work_count;
 };
 
 static int is_operator(struct mangle *mangle);
@@ -191,7 +198,7 @@ static int expect(struct mangle *mangle, const char *keyword)
 {
   assert(mangle != NULL);
   if (mangle->valid && !match(mangle, keyword))
-    mangle->valid = 0;
+    mangle->valid = false;
   return mangle->valid;
 }
 
@@ -374,10 +381,13 @@ static void append(struct mangle *mangle, const char *text)
   assert(text != NULL);
   if (mangle->valid) {
     size_t len = strlen(mangle->plain);
+    /* add a space to avoid ambiguity */
+    if (len > 0 && mangle->plain[len - 1] == *text && (mangle->plain[len - 1] == '<' || mangle->plain[len - 1] == '>'))
+      strcpy(mangle->plain + len++, " ");
     if (len + strlen(text) < mangle->size)
       strcpy(mangle->plain + len, text);
     else
-      mangle->valid = 0;
+      mangle->valid = false;
   }
 }
 
@@ -451,10 +461,11 @@ static void add_substitution(struct mangle *mangle, const char *text, int tpl)
     memcpy(str, text, length);
     str[length] = '\0';
     if (tpl) {
-      assert(mangle->tpl_subst_count < MAX_TEMPLATE_SUBST);
+      /* insert in the work table */
+      assert(mangle->tpl_work_count < MAX_TEMPLATE_SUBST);
       if (mangle->subst_count < MAX_TEMPLATE_SUBST) {
-        mangle->tpl_subst[mangle->tpl_subst_count] = str;
-        mangle->tpl_subst_count += 1;
+        mangle->tpl_work[mangle->tpl_work_count] = str;
+        mangle->tpl_work_count += 1;
       }
     } else {
       assert(mangle->subst_count < MAX_SUBSTITUTIONS);
@@ -466,15 +477,23 @@ static void add_substitution(struct mangle *mangle, const char *text, int tpl)
   }
 }
 
-static void free_tpl_subst(struct mangle *mangle, size_t top)
+static void tpl_subst_swap(struct mangle *mangle)
 {
   assert(mangle != NULL);
-  assert(top <= mangle->tpl_subst_count);
-  for (size_t i = 0; i < top; i++) {
+  /* free the look-up table */
+  for (size_t i = 0; i < mangle->tpl_subst_count; i++) {
     assert(mangle->tpl_subst[i] != NULL);
     free((void*)mangle->tpl_subst[i]);
     mangle->tpl_subst[i] = NULL;
   }
+  /* copy the work table into the look-up table */
+  for (size_t i = 0; i < mangle->tpl_work_count; i++) {
+    assert(mangle->tpl_work[i] != NULL);
+    mangle->tpl_subst[i] = mangle->tpl_work[i];
+    mangle->tpl_work[i] = NULL;
+  }
+  mangle->tpl_subst_count = mangle->tpl_work_count;
+  mangle->tpl_work_count = 0;
 }
 
 /** _qualifier_pre() handles <cv-qualifier> plus optionally <ref-qualifier>, but
@@ -517,6 +536,8 @@ static void _qualifier_post(struct mangle *mangle, const char *qualifiers)
       append(mangle, "&");
     else if (qualifiers[i] == 'O')
       append(mangle, "&&");
+    else
+      assert(0);
   }
 }
 
@@ -562,7 +583,6 @@ static void _template_args(struct mangle *mangle)
   */
   assert(mangle != NULL);
   if (match(mangle, "I")) {
-    size_t tpl_base = mangle->tpl_subst_count;
     append(mangle, "<");
     int count = 0;
     while (mangle->valid && !match(mangle, "E")) {
@@ -573,15 +593,7 @@ static void _template_args(struct mangle *mangle)
       add_substitution(mangle, mark, 1);
     }
     append(mangle, ">");
-    /* forget any previous template parameters, move new parameters up */
-    if (tpl_base > 0) {
-      free_tpl_subst(mangle, tpl_base);
-      for (size_t i = tpl_base; i < mangle->tpl_subst_count; i++) {
-        mangle->tpl_subst[i - tpl_base] = mangle->tpl_subst[i];
-        mangle->tpl_subst[i] = 0;
-      }
-      mangle->tpl_subst_count -= tpl_base;
-    }
+    tpl_subst_swap(mangle); /* swap any previous (or nested) template parameters by the new ones */
   }
 }
 
@@ -609,15 +621,15 @@ static void _source_name(struct mangle *mangle)
   assert(mangle != NULL);
   if (mangle->valid) {
     if (!isdigit(*mangle->mpos)) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     int count = (int)strtol(mangle->mpos, (char**)&mangle->mpos, 10);
     if ((int)strlen(mangle->mpos) < count) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
-    char *tmpname = _alloca(count + 1);
+    char *tmpname = alloca(count + 1);
     memcpy(tmpname, mangle->mpos, count);
     tmpname[count] = '\0';
     append(mangle, tmpname);
@@ -655,7 +667,7 @@ static void _unqualified_name(struct mangle *mangle)
     } else if (is_operator(mangle) >= 0) {
       _operator(mangle);
     } else {
-      mangle->valid = 0;
+      mangle->valid = false;
     }
   }
 }
@@ -707,7 +719,7 @@ static void _function_type(struct mangle *mangle)
     /* move the parameter list into position */
     if (mangle->parameter_base[mangle->func_nest] != 0) {
       size_t len = strlen(plist);
-      char *buffer = _alloca((len + 1) * sizeof(char));
+      char *buffer = alloca((len + 1) * sizeof(char));
       strcpy(buffer, plist);
       *plist = '\0';
       char *pos = insertion_point(mangle, mangle->parameter_base[mangle->func_nest]);
@@ -727,7 +739,7 @@ static void _pointer_to_member_type(struct mangle *mangle)
        the member type */
     _type(mangle);
     size_t len = strlen(mark);
-    char *classtype = _alloca((len + 10) * sizeof(char));  /* add some space, because of characters concatenated */
+    char *classtype = alloca((len + 10) * sizeof(char));  /* add some space, because of characters concatenated */
     strcpy(classtype, mark);
     strcat(classtype, "::*");
     *mark = '\0'; /* resture plain string */
@@ -760,9 +772,9 @@ static void _array(struct mangle *mangle)
     int count = 0;
     do {
       mpos_stack[count++] = mangle->mpos;
-      while (*mangle->mpos != '_') {
+      while (*mangle->mpos != '_' && *mangle->mpos != '\0') {
         if (on_sentinel(mangle))
-          mangle->valid = 0;
+          mangle->valid = false;
         mangle->mpos += 1;
       }
       expect(mangle, "_");
@@ -798,7 +810,7 @@ static int is_abbreviation(struct mangle *mangle)
   assert(mangle != NULL);
   if (strlen(mangle->mpos) < 2)
     return -1;
-  for (int i = 0; i < sizearray(abbreviations); i++) {
+  for (size_t i = 0; i < sizearray(abbreviations); i++) {
     assert(strlen(abbreviations[i].abbrev) == 2);
     if (strncmp(mangle->mpos, abbreviations[i].abbrev, 2) == 0)
       return i;
@@ -822,7 +834,7 @@ static void _substitution(struct mangle *mangle)
         } else if (isupper(*mangle->mpos)) {
           digit = *mangle->mpos - 'A' + 10;
         } else {
-          mangle->valid = 0;
+          mangle->valid = false;
           return;
         }
         index = index * 36 + digit;
@@ -832,7 +844,7 @@ static void _substitution(struct mangle *mangle)
     }
     expect(mangle, "_");
     if (index >= mangle->subst_count) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     assert(mangle->substitions[index] != NULL);
@@ -852,7 +864,7 @@ static void _template_param(struct mangle *mangle)
       index = (int)strtol(mangle->mpos, (char**)&mangle->mpos, 10) + 1;
     expect(mangle, "_");
     if (index >= mangle->tpl_subst_count) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     assert(mangle->tpl_subst[index] != NULL);
@@ -918,11 +930,11 @@ static void _ctor_dtor_name(struct mangle *mangle)
     while (head != mangle->plain && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1) == '_'))
       head -= 1;  /* find start of class name */
     if (head == tail) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     size_t len = tail - head;
-    char *cname = _alloca((len + 1) * sizeof(char));
+    char *cname = alloca((len + 1) * sizeof(char));
     memcpy(cname, head, len);
     cname[len] = '\0';
     if (*tail != ':')
@@ -948,7 +960,7 @@ static int is_operator(struct mangle *mangle)
   assert(mangle != NULL);
   if (strlen(mangle->mpos) < 2)
     return -1;
-  for (int i = 0; i < sizearray(operators); i++) {
+  for (size_t i = 0; i < sizearray(operators); i++) {
     assert(strlen(operators[i].abbrev) == 2);
     if (strncmp(mangle->mpos, operators[i].abbrev, 2) == 0)
       return i;
@@ -961,12 +973,12 @@ static void _operator(struct mangle *mangle)
   assert(mangle != NULL);
   if (mangle->valid) {
     if (strlen(mangle->mpos) < 2) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     int i = is_operator(mangle);
     if (i < 0) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     mangle->mpos += 2;
@@ -976,7 +988,7 @@ static void _operator(struct mangle *mangle)
       /* special case for typecast operator */
       append(mangle, " ");
       _type(mangle);
-      mangle->is_typecast_op = 1;
+      mangle->is_typecast_op = true;
     } else {
       if (isalpha(operators[i].name[0]))
         append(mangle, " ");
@@ -1048,7 +1060,7 @@ static void _expr_primary(struct mangle *mangle)
     } else if (match(mangle, "Dn")) {
       append(mangle, "nullptr");
     } else {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
     expect(mangle, "E");
@@ -1084,7 +1096,7 @@ static void _nested_name(struct mangle *mangle)
       add_substitution(mangle, mark, 0);
     } else if (is_abbreviation(mangle) >= 0) {
       int i = is_abbreviation(mangle);
-      assert(i >= 0 && i < sizearray(abbreviations));
+      assert(i >= 0 && i < (int)sizearray(abbreviations));
       assert(strlen(abbreviations[i].abbrev) == 2);
       mangle->mpos += 2;
       append(mangle, abbreviations[i].name);
@@ -1098,7 +1110,7 @@ static void _nested_name(struct mangle *mangle)
     }
     /* at least one name should follow, so separator can be appended */
     if (match(mangle, "E")) {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
 
@@ -1146,14 +1158,14 @@ static void _name(struct mangle *mangle)
    */
   assert(mangle != NULL);
   char *mark = current_position(mangle);
-  int is_unscoped = 1;
+  bool is_unscoped = true;
   if (mangle->valid) {
     if (peek(mangle, "N")) {
       _nested_name(mangle);
-      is_unscoped = 0;
+      is_unscoped = false;
     } else if (peek(mangle, "Z")) {
       _local_name(mangle);
-      is_unscoped = 0;
+      is_unscoped = false;
     } else if (is_abbreviation(mangle) == 0) {
       assert(strlen(abbreviations[0].abbrev) == 2);
       mangle->mpos += 2;
@@ -1181,7 +1193,7 @@ static void _name(struct mangle *mangle)
     } else if (peek(mangle, "Ut")) {
       _unnamed_type_name(mangle);
     } else {
-      mangle->valid = 0;
+      mangle->valid = false;
     }
   }
 
@@ -1201,7 +1213,7 @@ static int is_builtin_type(struct mangle *mangle)
   size_t remaining = strlen(mangle->mpos);
   if (remaining < 1)
     return -1;
-  for (int i = 0; i < sizearray(types); i++) {
+  for (size_t i = 0; i < sizearray(types); i++) {
     size_t len = strlen(types[i].abbrev);
     if (len <= remaining && strncmp(mangle->mpos, types[i].abbrev, len) == 0)
       return i;
@@ -1244,7 +1256,7 @@ static void _type(struct mangle *mangle)
     char *mark = current_position(mangle);
     if (is_builtin_type(mangle) >= 0) {
       int i = is_builtin_type(mangle);
-      assert(i >= 0 && i < sizearray(types));
+      assert(i >= 0 && i < (int)sizearray(types));
       mangle->mpos += strlen(types[i].abbrev);
       append(mangle, types[i].name);
     } else if (peek(mangle, "r") || peek(mangle, "V") || peek(mangle, "K")) {
@@ -1284,7 +1296,7 @@ static void _type(struct mangle *mangle)
       add_substitution(mangle, mark, 0);
     } else if (is_abbreviation(mangle) >= 0) {
       int i = is_abbreviation(mangle);
-      assert(i >= 0 && i < sizearray(abbreviations));
+      assert(i >= 0 && i < (int)sizearray(abbreviations));
       assert(strlen(abbreviations[i].abbrev) == 2);
       mangle->mpos += 2;
       append(mangle, abbreviations[i].name);
@@ -1311,14 +1323,14 @@ static void _type(struct mangle *mangle)
       _pointer_to_member_type(mangle);
     } else if (peek(mangle, "L")) {
       _expr_primary(mangle);
-    } else if (isdigit(*mangle->mpos) || (*mangle->mpos == 'u') && isdigit(*(mangle->mpos + 1))) {
+    } else if (isdigit(*mangle->mpos) || (*mangle->mpos == 'u' && isdigit(*(mangle->mpos + 1)))) {
       if (*mangle->mpos == 'u')
         mangle->mpos += 1;  /* ignore "vendor-extended" type (N.B. Itanium ABI uses upper-case 'U', but c++filt only accepts lower-case 'u') */
       _source_name(mangle);
       add_substitution(mangle, mark, 0);
       _template_args(mangle);
     } else {
-      mangle->valid = 0;
+      mangle->valid = false;
       return;
     }
   }
@@ -1330,11 +1342,11 @@ static void _function_encoding(struct mangle *mangle)
 
   if (on_sentinel(mangle) || (mangle->nest > 0 && match(mangle, "E"))) {
     if (mangle->func_nest > 0)
-      mangle->valid = 0;
+      mangle->valid = false;
     return;
   }
   if (strlen(mangle->plain) == 0) {
-    mangle->valid = 0;
+    mangle->valid = false;
     return;
   }
 
@@ -1350,7 +1362,7 @@ static void _function_encoding(struct mangle *mangle)
   if (mangle->plain[strlen(mangle->plain) - 1] == '>' && !mangle->is_typecast_op) {
     char *mark = current_position(mangle);
     _type(mangle);
-    type_string = _alloca((strlen(mark) + 5) * sizeof(char));
+    type_string = alloca((strlen(mark) + 5) * sizeof(char));
     strcpy(type_string, mark);
     char *ipos = insertion_point(mangle, mark);
     type_ins_point = ipos - mark;
@@ -1439,17 +1451,20 @@ int demangle(char *plain, size_t size, const char *mangled)
   mangle.subst_count = 0;
   memset(mangle.tpl_subst, 0, MAX_TEMPLATE_SUBST * sizeof(char*));
   mangle.tpl_subst_count = 0;
+  memset(mangle.tpl_work, 0, MAX_TEMPLATE_SUBST * sizeof(char*));
+  mangle.tpl_work_count = 0;
   memset(mangle.parameter_base, 0, MAX_FUNC_NESTING * sizeof(char*));
   mangle.func_nest = 0;
   memset(mangle.qualifiers, 0, sizeof mangle.qualifiers);
 
-  mangle.valid = 1;
+  mangle.valid = true;
+  mangle.is_typecast_op = false;
   mangle.nest = 0;
-  mangle.is_typecast_op = 0;
   mangle.plain[0] = '\0';
   _encoding(&mangle);
 
-  free_tpl_subst(&mangle, mangle.tpl_subst_count);
+  tpl_subst_swap(&mangle);  /* this frees the lookup table & moves the work table to lookup */
+  tpl_subst_swap(&mangle);  /* free the lookup table again, in case the work table still held left-overs */
   for (size_t i = 0; i < mangle.subst_count; i++) {
     assert(mangle.substitions[i] != NULL);
     free((void*)mangle.substitions[i]);

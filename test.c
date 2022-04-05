@@ -84,7 +84,7 @@ int main(int argc,char *argv[])
   test("_ZN5libcw5debug13cwprint_usingINS_9_private_12GlobalObjectEEENS0_17cwprint_using_tctIT_EERKS5_MS5_KFvRSt7ostreamE", "libcw::debug::cwprint_using_tct<libcw::_private_::GlobalObject> libcw::debug::cwprint_using<libcw::_private_::GlobalObject>(libcw::_private_::GlobalObject const&,void (libcw::_private_::GlobalObject::*)(std::ostream&) const)");
   test("_ZNKSt15_Deque_iteratorIP15memory_block_stRKS1_PS2_EeqERKS5_", "std::_Deque_iterator<memory_block_st*,memory_block_st* const&,memory_block_st* const*>::operator==(std::_Deque_iterator<memory_block_st*,memory_block_st* const&,memory_block_st* const*> const&) const");
   test("_Z1fI1APS0_PKS0_EvT_T0_T1_PA4_S3_M1CS8_", "void f<A,A*,A const*>(A,A*,A const*,A const*(*)[4],A const*(* C::*)[4])");
-  test("_ZNKSt17__normal_iteratorIPK6optionSt6vectorIS0_SaIS0_EEEmiERKS6_", "std::__normal_iterator<option const*,std::vector<option,std::allocator<option>>>::operator-(std::__normal_iterator<option const*,std::vector<option,std::allocator<option>>> const&) const");
+  test("_ZNKSt17__normal_iteratorIPK6optionSt6vectorIS0_SaIS0_EEEmiERKS6_", "std::__normal_iterator<option const*,std::vector<option,std::allocator<option> > >::operator-(std::__normal_iterator<option const*,std::vector<option,std::allocator<option> > > const&) const");
   test("_ZNSbIcSt11char_traitsIcEN5libcw5debug27no_alloc_checking_allocatorEE12_S_constructIPcEES6_T_S7_RKS3_", "char* std::basic_string<char,std::char_traits<char>,libcw::debug::no_alloc_checking_allocator>::_S_construct<char*>(char*,char*,libcw::debug::no_alloc_checking_allocator const&)");
   test("_Z10hairyfunc5PFPFilEPcE", "hairyfunc5(int(*(*)(char*))(long))");
   test("_ZNK11__gnu_debug16_Error_formatter14_M_format_wordImEEvPciPKcT_", "void __gnu_debug::_Error_formatter::_M_format_word<unsigned long>(char*,int,char const*,unsigned long) const");
@@ -114,6 +114,10 @@ int main(int argc,char *argv[])
   test("_Z1fDfDdDeDhDsDi", "f(decimal32,decimal64,decimal128,decimal16,char16_t,char32_t)");
   test("_ZN1AdlEPv", "A::operator delete(void*)");
   test("_Z1fIiERDaRKT_S1_", "auto& f<int>(int const&,int)");
+  test("_Z5totalIdEiT_S0_", "int total<double>(double,double)");
+  test("_Z5totalIidEiT_T0_", "int total<int,double>(int,double)");
+  test("_Z5totalIidfEiT_T0_T1_", "int total<int,double,float>(int,double,float)");
+  test("_ZStlsISt11char_traitsIcEERSt13basic_ostreamIcT_ES5_PKc@@GLIBCXX_3.4", "std::basic_ostream<char,std::char_traits<char> >& std::operator<< <std::char_traits<char> >(std::basic_ostream<char,std::char_traits<char> >&,char const*)");
   return 0;
 }
 
