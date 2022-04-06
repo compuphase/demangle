@@ -12,10 +12,8 @@ The library is written in plain C with C99 extensions.
 
 The current state of the library has the following known deficiencies:
 
-* Pack expansion is not handled yet.
 * No support for expressions; literals are handled, but operations on the literals are not.
 * No support for decltype().
-* No lambda's either.
 
 ## Usage
 
@@ -29,8 +27,9 @@ The function returns 0 (zero) on failure, and 1 on success.
 
 ## Limitations
 
-* Only Itanium ABI (no support for Microsoft Visual C/C++)
-* Only C++ (no Java, Rust, ...)
+* Only Itanium ABI (no support for Microsoft Visual C/C++).
+* Only C++ (no Java, Rust, ...).
+* No support for an extra leading underscore; if you have a compiler that prefixes every symbol with an underscore, you ought to skip it before calling the `demangle` function. (A leading underscore on every symbol is common on COFF files, but not on ELF).
 
 ## Why build my own
 

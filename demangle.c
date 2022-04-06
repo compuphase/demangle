@@ -39,6 +39,7 @@ struct mangle {
   const char *mpos;     /**< current position, look-ahead pointer */
   bool valid;           /**< whether the mangled name is valid */
   bool is_typecast_op;  /**< whether this a typecast operator */
+  bool pack_expansion;  /**< whether template parameter substitution refers to a pack */
   short nest;           /**< nesting level for names */
   short func_nest;      /**< function nesting level (of parameter lists) */
   char qualifiers[8];   /**< const, reference, and others */
@@ -54,15 +55,19 @@ struct mangle {
 static int is_operator(struct mangle *mangle);
 static int is_builtin_type(struct mangle *mangle);
 static int is_abbreviation(struct mangle *mangle);
+static bool is_ctor_dtor_name(struct mangle *mangle);
 
+static bool _abi_tags(struct mangle *mangle);
 static void _template_args(struct mangle *mangle);
+static void _template_args_pack(struct mangle *mangle);
 static void _source_name(struct mangle *mangle);
 static void _unqualified_name(struct mangle *mangle);
 static void _decltype(struct mangle *mangle);
 static void _function_type(struct mangle *mangle);
+static void _closure_type(struct mangle *mangle);
+static void _unnamed_type_name(struct mangle *mangle);
 static void _substitution(struct mangle *mangle);
 static void _template_param(struct mangle *mangle);
-static void _unnamed_type_name(struct mangle *mangle);
 static void _local_name(struct mangle *mangle);
 static void _ctor_dtor_name(struct mangle *mangle);
 static void _operator(struct mangle *mangle);
@@ -150,10 +155,10 @@ static const struct stringpair types[] = {
   { "d", "double" },
   { "e", "long double" },       /* __float80 */
   { "g", "__float128" },
-  { "z", "ellipsis" },
+  { "z", "..." },
   { "Da","auto" },
   { "Dc","decltype(auto)" },
-  { "Dn","std::nullptr_t" },    /* i.e., decltype(nullptr) */
+  { "Dn","decltype(nullptr)" },
   { "Dh","decimal16" },
   { "Df","decimal32" },
   { "Dd","decimal64" },
@@ -212,6 +217,21 @@ static int on_sentinel(struct mangle *mangle)
          || (*mangle->mpos == '@' && *(mangle->mpos + 1) == '@'); /* library suffix */
 }
 
+static bool has_return_type(struct mangle *mangle)
+{
+  assert(mangle != NULL);
+  if (mangle->is_typecast_op)
+    return false;
+
+  size_t len = strlen(mangle->plain);
+  if (len < 1 || mangle->plain[len - 1] != '>')
+    return false;
+  if (len >= 2 && (isalnum(mangle->plain[len - 2]) || strchr(" ])*", mangle->plain[len - 2]) != NULL))
+    return true;
+
+  return false;
+}
+
 static const char *find_matching(const char *head, const char *tail, char c)
 {
   assert(head != NULL);
@@ -241,6 +261,14 @@ static const char *find_matching(const char *head, const char *tail, char c)
     break;
   case '>':
     m = '<';
+    dir = -1;
+    break;
+  case '{':
+    m = '}';
+    dir = 1;
+    break;
+  case '}':
+    m = '{';
     dir = -1;
     break;
   default:
@@ -572,14 +600,30 @@ static void _extended_qualifier(struct mangle *mangle)
   }
 }
 
+static bool _abi_tags(struct mangle *mangle)
+{
+  /* <abi-tag> := B <source-name>   # right-to-left associative
+   */
+  assert(mangle != NULL);
+  int count = 0;
+  while (match(mangle, "B")) {
+    append(mangle, (count++ == 0) ? "[" : ",");
+    append(mangle, "abi:");
+    _source_name(mangle);
+  }
+  if (count > 0)
+    append(mangle, "]");
+  return count > 0;
+}
+
 static void _template_args(struct mangle *mangle)
 {
-  /* <template->args> ::= I <template-arg>* E
+  /* <template-args> ::= I <template-arg>* E
 
      <template-arg> ::= <type>
                         X <expression> E      # expression (not yet handled)
                         <expr-primary>        # simple expressions (not yet handled)
-                        J <template-arg>* E   # argument pack (not yet handled)
+                        J <template-arg>* E   # argument pack
   */
   assert(mangle != NULL);
   if (match(mangle, "I")) {
@@ -589,11 +633,29 @@ static void _template_args(struct mangle *mangle)
       if (count++ > 0)
         append(mangle, ",");
       char *mark = current_position(mangle);
-      _type(mangle);
+      if (peek(mangle, "J"))
+        _template_args_pack(mangle);
+      else
+        _type(mangle);
       add_substitution(mangle, mark, 1);
     }
     append(mangle, ">");
     tpl_subst_swap(mangle); /* swap any previous (or nested) template parameters by the new ones */
+  }
+}
+
+static void _template_args_pack(struct mangle *mangle)
+{
+  /* <template->args-pack> ::= J <template-arg>* E
+  */
+  assert(mangle != NULL);
+  if (expect(mangle, "J")) {
+    int count = 0;
+    while (mangle->valid && !match(mangle, "E")) {
+      if (count++ > 0)
+        append(mangle, ",");
+      _type(mangle);
+    }
   }
 }
 
@@ -639,31 +701,33 @@ static void _source_name(struct mangle *mangle)
 
 static void _unqualified_name(struct mangle *mangle)
 {
-  /* <unqualified-name> ::= <operator-name> [<abi-tags>]
+  /* <unqualified-name> ::= <operator-name>
                             <ctor-dtor-name>
                             <source-name>
                             L <source-name> <discriminator> # <local-source-name>
-                            DC <source-name>+ E   # structured binding declaration
-                            Ut [ <number> ] _     # <unnamed-type-name>
-                            Ul <lambda-sig> E [ <nonnegative number> ] _  # <closure-type-name>
+                            DC <source-name>+ E             # structured binding declaration
+                            Ut [ <number> ] _               # <unnamed-type-name>
+                            Ul <type>+ E [ <number> ] _     # <closure-type-name>
   */
   assert(mangle != NULL);
   if (mangle->valid) {
-    if (match(mangle, "DC")) {
-      while (isdigit(*mangle->mpos))
-        _source_name(mangle);
-      expect(mangle, "E");
-    } else if (peek(mangle, "Ut")) {
-      _unnamed_type_name(mangle);
+    if (is_operator(mangle) >= 0) {
+      _operator(mangle);
+    } else if (is_ctor_dtor_name(mangle)) {
+      _ctor_dtor_name(mangle);
     } else if (isdigit(*mangle->mpos)) {
       _source_name(mangle);
     } else if (match(mangle, "L")) {
       _source_name(mangle);
       _discriminator(mangle);
-    } else if (peek(mangle, "C1") || peek(mangle, "C2") || peek(mangle, "C3")
-               || peek(mangle, "CI1") || peek(mangle, "CI2")
-               || peek(mangle, "D0") || peek(mangle, "D1") || peek(mangle, "D2")) {
-      _ctor_dtor_name(mangle);
+    } else if (match(mangle, "DC")) {
+      while (isdigit(*mangle->mpos))
+        _source_name(mangle);
+      expect(mangle, "E");
+    } else if (peek(mangle, "Ut")) {
+      _unnamed_type_name(mangle);
+    } else if (peek(mangle, "Ul")) {
+      _closure_type(mangle);
     } else if (is_operator(mangle) >= 0) {
       _operator(mangle);
     } else {
@@ -682,7 +746,9 @@ static void _decltype(struct mangle *mangle)
   if (!match(mangle, "Dt"))
     expect(mangle, "DT");
   if (mangle->valid) {
+    append(mangle, "decltype(");
     //??? not yet implemented
+    append(mangle, ")");
     expect(mangle, "E");
   }
 }
@@ -702,10 +768,10 @@ static void _function_type(struct mangle *mangle)
     append(mangle, "(");
     int count = 0;
     while (mangle->valid && !peek(mangle, "E")) {
-      char *mark = current_position(mangle);
-      mangle->parameter_base[mangle->func_nest] = mark;
       if (count > 0)
         append(mangle, ",");
+      char *mark = current_position(mangle);
+      mangle->parameter_base[mangle->func_nest] = mark;
       _type(mangle);
       /* special case for functions without parameters: erase "void" */
       if (count == 0 && strcmp(mark, "void") == 0 && peek(mangle, "E"))
@@ -725,6 +791,46 @@ static void _function_type(struct mangle *mangle)
       char *pos = insertion_point(mangle, mangle->parameter_base[mangle->func_nest]);
       insert(mangle, pos, buffer);
     }
+  }
+}
+
+static void _closure_type(struct mangle *mangle)
+{
+  /* <closure-type> ::= Ul <type>+ E [ <number> ] _
+   */
+  assert(mangle != NULL);
+  if (expect(mangle, "Ul")) {
+    append(mangle, "{lambda(");
+    int count = 0;
+    while (mangle->valid && !peek(mangle, "E")) {
+      if (count > 0)
+        append(mangle, ",");
+      char *mark = current_position(mangle);
+      _type(mangle);
+      /* special case for functions without parameters: erase "void" */
+      if (count == 0 && strcmp(mark, "void") == 0 && peek(mangle, "E"))
+        *mark = '\0';
+      count++;
+    }
+    expect(mangle, "E");
+    while (isdigit(*mangle->mpos))
+      mangle->mpos += 1;
+    expect(mangle, "_");
+    append(mangle, ")}");
+  }
+}
+
+static void _unnamed_type_name(struct mangle *mangle)
+{
+  /* <unnamed-type-name> ::= Ut [ <number> ] _
+   */
+  assert(mangle != NULL);
+  if (expect(mangle, "Ut")) {
+    /* ignore the sequence number */
+    while (isdigit(*mangle->mpos))
+      mangle->mpos += 1;
+    expect(mangle, "_");
+    append(mangle, "{unnamed type}");
   }
 }
 
@@ -868,23 +974,20 @@ static void _template_param(struct mangle *mangle)
       return;
     }
     assert(mangle->tpl_subst[index] != NULL);
-    append(mangle, mangle->tpl_subst[index]);
+    if (mangle->pack_expansion && strchr(mangle->tpl_subst[index], ',') == NULL) {
+      /* pack expansion is requested, but the paramater does not refer to a pack */
+      size_t len = strlen(mangle->tpl_subst[index]);
+      char *buffer = alloca((len + 8) * sizeof(char));
+      buffer[0] = '(';
+      memcpy(buffer + 1, mangle->tpl_subst[index], len);
+      memcpy(buffer + 1 + len, ")...", 5);  /* length = 5 to include the zero terminator */
+      append(mangle, buffer);
+    } else {
+      append(mangle, mangle->tpl_subst[index]);
+    }
     /* a template expansion is added as a substitution */
     add_substitution(mangle, mangle->tpl_subst[index], 0);
-  }
-}
-
-static void _unnamed_type_name(struct mangle *mangle)
-{
-  /* <unnamed-type-name> ::= Ut [ <number> ] _
-   */
-  assert(mangle != NULL);
-  if (expect(mangle, "Ut")) {
-    /* ignore the sequence number */
-    while (isdigit(*mangle->mpos))
-      mangle->mpos += 1;
-    expect(mangle, "_");
-    append(mangle, "{unnamed type}");
+    mangle->pack_expansion = false;
   }
 }
 
@@ -910,6 +1013,13 @@ static void _local_name(struct mangle *mangle)
   }
 }
 
+static bool is_ctor_dtor_name(struct mangle *mangle)
+{
+  return peek(mangle, "C1") || peek(mangle, "C2") || peek(mangle, "C3")
+         || peek(mangle, "CI1") || peek(mangle, "CI2")
+         || peek(mangle, "D0") || peek(mangle, "D1") || peek(mangle, "D2");
+}
+
 static void _ctor_dtor_name(struct mangle *mangle)
 {
   /* <ctor-dtor-name> ::= C1            # complete object constructor
@@ -927,8 +1037,14 @@ static void _ctor_dtor_name(struct mangle *mangle)
     if (tail > mangle->plain + 2 && *(tail - 1) == ':' && *(tail - 2) == ':')
       tail -= 2;
     const char *head = tail;
-    while (head != mangle->plain && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1) == '_'))
-      head -= 1;  /* find start of class name */
+    /* find start of class name */
+    if (head != mangle->plain && *(head - 1) == '}') {
+      head = find_matching(mangle->plain, head - 1, '}');
+      assert(head != NULL);
+    } else {
+      while (head != mangle->plain && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1)== '_'))
+        head -= 1;
+    }
     if (head == tail) {
       mangle->valid = false;
       return;
@@ -994,8 +1110,6 @@ static void _operator(struct mangle *mangle)
         append(mangle, " ");
       append(mangle, operators[i].name);
     }
-    //??? handle abi-tags
-    //    <abi-tag> := B <source-name> # right-to-left associative
   }
 }
 
@@ -1046,6 +1160,17 @@ static void _expr_primary(struct mangle *mangle)
       else if (t == 'h')
         append(mangle, "(unsigned char)");
       append(mangle, field);
+    } else if (t == 'b') {
+      mangle->mpos += 1;
+      get_number(mangle, field, sizearray(field), 0);
+      if (strcmp(field, "0") == 0) {
+        append(mangle, "false");
+      } else if (strcmp(field, "1") == 0) {
+        append(mangle, "true");
+      } else {
+        append(mangle, "(bool)");
+        append(mangle, field);
+      }
     } else if (t == 'A') {
       mangle->mpos += 1;
       long len = strtol(mangle->mpos, (char**)&mangle->mpos, 10);
@@ -1071,7 +1196,7 @@ static void _nested_name(struct mangle *mangle)
 {
   /* <nested-name> ::= N [<CV-qualifiers>] [<ref-qualifier>] <prefix> <name-param>* E
 
-     <prefix> ::= <unqualified-name>        # global class or namespace
+     <prefix> ::= <unqualified-name> <abi-tag*> # global class or namespace
               ::= <decltype>                # decltype qualifier
               ::= <template-param>          # template parameter (T_, T0_, etc.)
               ::= <substitution>
@@ -1091,6 +1216,7 @@ static void _nested_name(struct mangle *mangle)
     char *mark = current_position(mangle);
 
     /* prefix */
+    bool abi_tag = false;
     if (peek(mangle, "Dt") || peek(mangle, "DT")) {
       _decltype(mangle);
       add_substitution(mangle, mark, 0);
@@ -1106,11 +1232,22 @@ static void _nested_name(struct mangle *mangle)
       _template_param(mangle);
     } else {
       _unqualified_name(mangle);
-      add_substitution(mangle, mark, 0);
+      abi_tag = _abi_tags(mangle);
+      if (!peek(mangle, "E"))
+        add_substitution(mangle, mark, 0);
     }
-    /* at least one name should follow, so separator can be appended */
+    /* at least one name should follow, so separator can be appended; however,
+       ABI tags are also enveloped in <nested-name> */
     if (match(mangle, "E")) {
-      mangle->valid = false;
+      if (abi_tag) {
+        if (mangle->nest > 1)
+          _qualifier_post(mangle, qualifiers);
+        else
+          strcpy(mangle->qualifiers, qualifiers);  /* special case: see below */
+      } else {
+        mangle->valid = false;
+      }
+      mangle->nest -= 1;
       return;
     }
 
@@ -1142,19 +1279,20 @@ static void _name(struct mangle *mangle)
 {
   /* <name> := N <nested-name> E
                Z <local-name> E (<name> | s) [ (_ <number> | _ _ <number> _ )
-               <unscoped-name> <template-arg>*
+               <unscoped-name> <abi-tag>* <template-arg>*
 
      <unscoped-name> := St <unqualified-name>   #::std::
                         <subtitution>           # S <base-36-number>
                         <unqualified-name>
 
-     <unqualified-name> := <operator-name> <abi-tag>*
+     <unqualified-name> := <operator-name>
                            <ctor-dtor-name>
                            <source-name>        # <number> <text>
                            DC <source-name>+ E
                            Ut <unnamed-type-name> _
+                           Ul <type>+ E [ <number> ] _    # <closure-type-name>
 
-     <abi-tag> := B <source-name> # right-to-left associative
+     <abi-tag> := B <source-name>               # right-to-left associative
    */
   assert(mangle != NULL);
   char *mark = current_position(mangle);
@@ -1176,10 +1314,7 @@ static void _name(struct mangle *mangle)
       _substitution(mangle);
     } else if (is_operator(mangle) >= 0) {
       _operator(mangle);
-      //??? handle abi-tags (right-to-left)
-    } else if (peek(mangle, "C1") || peek(mangle, "C2") || peek(mangle, "C3")
-               || peek(mangle, "CI1") || peek(mangle, "CI2")
-               || peek(mangle, "D0") || peek(mangle, "D1") || peek(mangle, "D2")) {
+    } else if (is_ctor_dtor_name(mangle)) {
       _ctor_dtor_name(mangle);
     } else if (isdigit(*mangle->mpos)) {
       _source_name(mangle);
@@ -1192,11 +1327,15 @@ static void _name(struct mangle *mangle)
       expect(mangle, "E");
     } else if (peek(mangle, "Ut")) {
       _unnamed_type_name(mangle);
+    } else if (peek(mangle, "Ul")) {
+      _closure_type(mangle);
     } else {
       mangle->valid = false;
     }
   }
 
+  if (is_unscoped)
+    _abi_tags(mangle);
   if (is_unscoped && peek(mangle, "I")) {
     add_substitution(mangle, mark, 0);
     _template_args(mangle);
@@ -1250,7 +1389,11 @@ static void _type(struct mangle *mangle)
                         r    # restrict (C99)
                         V    # volatile
                         K    # const
-  */
+
+     <exception-spec> ::= Do                  # noexcept
+                          DO <expression> E   # noexcept(...)
+                          Dw <type>+ E        # throw(type, ...)
+   */
   assert(mangle != NULL);
   if (mangle->valid) {
     char *mark = current_position(mangle);
@@ -1323,6 +1466,9 @@ static void _type(struct mangle *mangle)
       _pointer_to_member_type(mangle);
     } else if (peek(mangle, "L")) {
       _expr_primary(mangle);
+    } else if (match(mangle, "Dp")) {
+      mangle->pack_expansion = true;
+      _template_param(mangle);
     } else if (isdigit(*mangle->mpos) || (*mangle->mpos == 'u' && isdigit(*(mangle->mpos + 1)))) {
       if (*mangle->mpos == 'u')
         mangle->mpos += 1;  /* ignore "vendor-extended" type (N.B. Itanium ABI uses upper-case 'U', but c++filt only accepts lower-case 'u') */
@@ -1359,7 +1505,7 @@ static void _function_encoding(struct mangle *mangle)
   /* check whether a return type is present; save it but process it later */
   char *type_string = NULL;
   size_t type_ins_point = 0;
-  if (mangle->plain[strlen(mangle->plain) - 1] == '>' && !mangle->is_typecast_op) {
+  if (has_return_type(mangle)) {
     char *mark = current_position(mangle);
     _type(mangle);
     type_string = alloca((strlen(mark) + 5) * sizeof(char));
@@ -1373,10 +1519,10 @@ static void _function_encoding(struct mangle *mangle)
   append(mangle, "(");
   int count = 0;
   while (!on_sentinel(mangle) && !(mangle->func_nest > 0 && peek(mangle, "E"))) {
-    char *mark = current_position(mangle);
-    mangle->parameter_base[mangle->func_nest] = mark;
     if (count > 0)
       append(mangle, ",");
+    char *mark = current_position(mangle);
+    mangle->parameter_base[mangle->func_nest] = mark;
     _type(mangle);
     /* special case for functions without parameters: erase "void" */
     if (count == 0 && strcmp(mark, "void") == 0
@@ -1459,6 +1605,7 @@ int demangle(char *plain, size_t size, const char *mangled)
 
   mangle.valid = true;
   mangle.is_typecast_op = false;
+  mangle.pack_expansion = false;
   mangle.nest = 0;
   mangle.plain[0] = '\0';
   _encoding(&mangle);

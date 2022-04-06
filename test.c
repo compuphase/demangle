@@ -118,6 +118,38 @@ int main(int argc,char *argv[])
   test("_Z5totalIidEiT_T0_", "int total<int,double>(int,double)");
   test("_Z5totalIidfEiT_T0_T1_", "int total<int,double,float>(int,double,float)");
   test("_ZStlsISt11char_traitsIcEERSt13basic_ostreamIcT_ES5_PKc@@GLIBCXX_3.4", "std::basic_ostream<char,std::char_traits<char> >& std::operator<< <std::char_traits<char> >(std::basic_ostream<char,std::char_traits<char> >&,char const*)");
+  test("_Z1gIJidEEvDpT_", "void g<int,double>(int,double)");
+  test("_Z1gIidEvDpT_", "void g<int,double>((int)...)");
+  test("_Z1fIT_EvT_", "failed");
+  test("_Z20instantiate_with_intI3FooET_IiEv", "Foo<int> instantiate_with_int<Foo>()");
+  test("_Z3fooISt6vectorIiEEvv", "void foo<std::vector<int> >()");
+  test("_ZN3foo3barE3quxS0_", "foo::bar(qux,qux)");
+  test("_ZN4funcI2TyEEN6ResultIT_EES3_", "Result<Ty> func<Ty>(Result<Ty>)");
+  test("_ZN4funcI2TyEEN6ResultIT_EES2_", "Result<Ty> func<Ty>(Ty)");
+  test("_ZN4funcI2TyEEN6ResultIT_EES1_", "Result<Ty> func<Ty>(Result)");
+  test("_ZN4funcI2TyEEN6ResultIT_EES0_", "Result<Ty> func<Ty>(Ty)");
+  test("_ZN4funcI2TyEEN6ResultIT_EES_", "Result<Ty> func<Ty>(func)");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES_", "void Ty::method<Ty>(void (Ty::*)(char const*),Ty)");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES0_", "void Ty::method<Ty>(void (Ty::*)(char const*),Ty::method)");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES1_", "void Ty::method<Ty>(void (Ty::*)(char const*),Ty)");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES2_", "void Ty::method<Ty>(void (Ty::*)(char const*),char const)");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES3_", "void Ty::method<Ty>(void (Ty::*)(char const*),char const*)");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES4_", "void Ty::method<Ty>(void (Ty::*)(char const*),void(char const*))");
+  test("_ZN2Ty6methodIS_EEvMT_FvPKcES5_", "void Ty::method<Ty>(void (Ty::*)(char const*),void (Ty::*)(char const*))");
+  test("_ZNK1fB5cxx11Ev", "f[abi:cxx11]() const");
+  test("_ZUlvE_", "{lambda()}");
+  test("_ZUlisE_", "{lambda(int,short)}");
+  test("_ZZ3aaavEUlvE_", "aaa()::{lambda()}");
+  test("_ZZ3aaavENUlvE_3bbbE", "aaa()::{lambda()}::bbb");
+  test("_ZN3aaaUlvE_D1Ev", "aaa::{lambda()}::~{lambda()}()");
+  test("_ZZ3aaavEN3bbbD1Ev", "aaa()::bbb::~bbb()");
+  test("_ZZ3aaavENUlvE_D1Ev", "aaa()::{lambda()}::~{lambda()}()");
+  test("_Z3fooILb0EEvi", "void foo<false>(int)");
+  test("_Z3fooILb1EEvi", "void foo<true>(int)");
+  test("_Z3fooILb2EEvi", "void foo<(bool)2>(int)");
+  test("_ZN6WebKit25WebCacheStorageConnection17didReceiveMessageERN3IPC10ConnectionERNS1_7DecoderE", "WebKit::WebCacheStorageConnection::didReceiveMessage(IPC::Connection&,IPC::Decoder&)");
+  test("_ZN3IPC10Connection15dispatchMessageESt10unique_ptrINS_7DecoderESt14default_deleteIS2_EE", "IPC::Connection::dispatchMessage(std::unique_ptr<IPC::Decoder,std::default_delete<IPC::Decoder> >)");
+  test("_ZNK1QssERKS_", "Q::operator<=>(Q const&) const");
   return 0;
 }
 
