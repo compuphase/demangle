@@ -62,7 +62,6 @@ static void _template_args(struct mangle *mangle);
 static void _template_args_pack(struct mangle *mangle);
 static void _source_name(struct mangle *mangle);
 static void _unqualified_name(struct mangle *mangle);
-static void _decltype(struct mangle *mangle);
 static void _function_type(struct mangle *mangle);
 static void _closure_type(struct mangle *mangle);
 static void _unnamed_type_name(struct mangle *mangle);
@@ -72,66 +71,81 @@ static void _local_name(struct mangle *mangle);
 static void _ctor_dtor_name(struct mangle *mangle);
 static void _operator(struct mangle *mangle);
 static void _expr_primary(struct mangle *mangle);
+static void _expression(struct mangle *mangle);
+static void _decltype(struct mangle *mangle);
 static void _nested_name(struct mangle *mangle);
 static void _name(struct mangle *mangle);
 static void _type(struct mangle *mangle);
 static void _function_encoding(struct mangle *mangle);
 static void _encoding(struct mangle *mangle);
 
+struct operator_def {
+  const char *abbrev;
+  const char *name;
+  short operands;
+};
+
+static const struct operator_def operators[] = {
+  { "cv", "(?)", 1 },           /* type cast */
+  { "nw", "new", 1 },
+  { "na", "new[]", 1 },
+  { "dl", "delete", 1 },
+  { "da", "delete[]", 1 },
+  { "ng", "-", 1 },             /* (unary) */
+  { "ad", "&", 1 },             /* (unary) */
+  { "de", "*", 1 },             /* (unary) */
+  { "co", "~", 2 },
+  { "pl", "+", 2 },
+  { "mi", "-", 2 },
+  { "ml", "*", 2 },
+  { "dv", "/", 2 },
+  { "rm", "%", 2 },
+  { "an", "&", 2 },
+  { "or", "|", 2 },
+  { "eo", "^", 2 },
+  { "aS", "=", 2 },
+  { "pL", "+=", 2 },
+  { "mI", "-=", 2 },
+  { "mL", "*=", 2 },
+  { "dV", "/=", 2 },
+  { "rM", "%=", 2 },
+  { "aN", "&=", 2 },
+  { "oR", "|=", 2 },
+  { "eO", "^=", 2 },
+  { "ls", "<<", 2 },
+  { "rs", ">>", 2 },
+  { "lS", "<<=", 2 },
+  { "rS", ">>=", 2 },
+  { "eq", "==", 2 },
+  { "ne", "!=", 2 },
+  { "lt", "<", 2 },
+  { "gt", ">", 2 },
+  { "le", "<=", 2 },
+  { "ge", ">=", 2 },
+  { "ss", "<=>", 2 },
+  { "nt", "!", 1 },
+  { "aa", "&&", 2 },
+  { "oo", "||", 2 },
+  { "pp", "++", 1 },            /* postfix in <expression> context */
+  { "mm", "--", 1 },            /* postfix in <expression> context */
+  { "cm", ",", 2 },
+  { "pm", "->*", 2 },
+  { "pt", "->", 2 },
+  { "cl", "()", 0 },            /* arbitrary number of operands */
+  { "ix", "[]", 2 },
+  { "qu", "?", 3 },
+  /* ----- for use in <expression> context only */
+  { "pp_", "++", 1 },           /* prefix */
+  { "mm_", "--", 1 },           /* prefix */
+  { "dt", ".", 2 },
+  { "pt", "->", 2 },
+  { "ds", ".*", 2 },
+  { "sr", "::", 2 },
+};
+
 struct stringpair {
   const char *abbrev;
   const char *name;
-};
-
-static const struct stringpair operators[] = {
-  { "cv", "(?)" },              /* type cast */
-  { "nw", "new" },
-  { "na", "new[]" },
-  { "dl", "delete" },
-  { "da", "delete[]" },
-  { "ng", "-" },                /* (unary) */
-  { "ad", "&" },                /* (unary) */
-  { "de", "*" },                /* (unary) */
-  { "co", "~" },
-  { "pl", "+" },
-  { "mi", "-" },
-  { "ml", "*" },
-  { "dv", "/" },
-  { "rm", "%" },
-  { "an", "&" },
-  { "or", "|" },
-  { "eo", "^" },
-  { "aS", "=" },
-  { "pL", "+=" },
-  { "mI", "-=" },
-  { "mL", "*=" },
-  { "dV", "/=" },
-  { "rM", "%=" },
-  { "aN", "&=" },
-  { "oR", "|=" },
-  { "eO", "^=" },
-  { "ls", "<<" },
-  { "rs", ">>" },
-  { "lS", "<<=" },
-  { "rS", ">>=" },
-  { "eq", "==" },
-  { "ne", "!=" },
-  { "lt", "<" },
-  { "gt", ">" },
-  { "le", "<=" },
-  { "ge", ">=" },
-  { "ss", "<=>" },
-  { "nt", "!" },
-  { "aa", "&&" },
-  { "oo", "||" },
-  { "pp", "++" },               /* (postfix in <expression> context) */
-  { "mm", "--" },               /* (postfix in <expression> context) */
-  { "cm", "," },
-  { "pm", "->*" },
-  { "pt", "->" },
-  { "cl", "()" },
-  { "ix", "[]" },
-  { "qu", "?" },
 };
 
 static const struct stringpair types[] = {
@@ -226,7 +240,7 @@ static bool has_return_type(struct mangle *mangle)
   size_t len = strlen(mangle->plain);
   if (len < 1 || mangle->plain[len - 1] != '>')
     return false;
-  if (len >= 2 && (isalnum(mangle->plain[len - 2]) || strchr(" ])*", mangle->plain[len - 2]) != NULL))
+  if (len >= 2 && (isalnum(mangle->plain[len - 2]) || strchr(" ])*&", mangle->plain[len - 2]) != NULL))
     return true;
 
   return false;
@@ -318,6 +332,8 @@ static char *check_func_array(struct mangle *mangle, const char *base)
   if (*p == ')') {
     p = find_matching(mangle->plain, p, *p);
     assert(p != NULL && *p == '(');
+    if (p >= base + 8 && strncmp(p - 8, "decltype", 8) == 0)
+      p -= 8;
   } else if (*p == ']') {
     while (*p == ']') {
       p = find_matching(mangle->plain, p,*p);
@@ -620,10 +636,10 @@ static void _template_args(struct mangle *mangle)
 {
   /* <template-args> ::= I <template-arg>* E
 
-     <template-arg> ::= <type>
-                        X <expression> E      # expression (not yet handled)
-                        <expr-primary>        # simple expressions (not yet handled)
-                        J <template-arg>* E   # argument pack
+     <template-arg> ::= J <template-arg>* E   # argument pack
+                        X <expression> E      # expression
+                        <expr-primary>        # simple expressions
+                        <type>
   */
   assert(mangle != NULL);
   if (match(mangle, "I")) {
@@ -633,10 +649,16 @@ static void _template_args(struct mangle *mangle)
       if (count++ > 0)
         append(mangle, ",");
       char *mark = current_position(mangle);
-      if (peek(mangle, "J"))
+      if (peek(mangle, "J")) {
         _template_args_pack(mangle);
-      else
+      } else if (match(mangle, "X")) {
+        _expression(mangle);
+        expect(mangle, "E");
+      } else if (peek(mangle, "L")) {
+        _expr_primary(mangle);
+      } else {
         _type(mangle);
+      }
       add_substitution(mangle, mark, 1);
     }
     append(mangle, ">");
@@ -733,23 +755,6 @@ static void _unqualified_name(struct mangle *mangle)
     } else {
       mangle->valid = false;
     }
-  }
-}
-
-static void _decltype(struct mangle *mangle)
-{
-  /* <decltype>  ::= Dt <expression> E  # decltype of an id-expression or class member access
-                     DT <expression> E  # decltype of an expression
-
-   */
-  assert(mangle != NULL);
-  if (!match(mangle, "Dt"))
-    expect(mangle, "DT");
-  if (mangle->valid) {
-    append(mangle, "decltype(");
-    //??? not yet implemented
-    append(mangle, ")");
-    expect(mangle, "E");
   }
 }
 
@@ -974,19 +979,23 @@ static void _template_param(struct mangle *mangle)
       return;
     }
     assert(mangle->tpl_subst[index] != NULL);
+    size_t len = strlen(mangle->tpl_subst[index]);
+    if (len == 0) {
+      mangle->valid = false;
+      return;
+    }
+    char *buffer = alloca((len + 10) * sizeof(char));
     if (mangle->pack_expansion && strchr(mangle->tpl_subst[index], ',') == NULL) {
       /* pack expansion is requested, but the paramater does not refer to a pack */
-      size_t len = strlen(mangle->tpl_subst[index]);
-      char *buffer = alloca((len + 8) * sizeof(char));
       buffer[0] = '(';
       memcpy(buffer + 1, mangle->tpl_subst[index], len);
       memcpy(buffer + 1 + len, ")...", 5);  /* length = 5 to include the zero terminator */
-      append(mangle, buffer);
     } else {
-      append(mangle, mangle->tpl_subst[index]);
+      strcpy(buffer, mangle->tpl_subst[index]);
     }
+    append(mangle, buffer);
     /* a template expansion is added as a substitution */
-    add_substitution(mangle, mangle->tpl_subst[index], 0);
+    add_substitution(mangle, buffer, 0);
     mangle->pack_expansion = false;
   }
 }
@@ -1077,8 +1086,7 @@ static int is_operator(struct mangle *mangle)
   if (strlen(mangle->mpos) < 2)
     return -1;
   for (size_t i = 0; i < sizearray(operators); i++) {
-    assert(strlen(operators[i].abbrev) == 2);
-    if (strncmp(mangle->mpos, operators[i].abbrev, 2) == 0)
+    if (strncmp(mangle->mpos, operators[i].abbrev, strlen(operators[i].abbrev)) == 0)
       return i;
   }
   return -1;
@@ -1088,16 +1096,12 @@ static void _operator(struct mangle *mangle)
 {
   assert(mangle != NULL);
   if (mangle->valid) {
-    if (strlen(mangle->mpos) < 2) {
-      mangle->valid = false;
-      return;
-    }
     int i = is_operator(mangle);
     if (i < 0) {
       mangle->valid = false;
       return;
     }
-    mangle->mpos += 2;
+    mangle->mpos += strlen(operators[i].abbrev);
     append_space(mangle);
     append(mangle, "operator");
     if (i == 0) {
@@ -1182,6 +1186,8 @@ static void _expr_primary(struct mangle *mangle)
       for (long i = 0; i < len; i++)
         append(mangle, "?");
       append(mangle, "\"");
+    } else if (match(mangle, "_Z")) {
+      _function_encoding(mangle);
     } else if (match(mangle, "Dn")) {
       append(mangle, "nullptr");
     } else {
@@ -1192,14 +1198,69 @@ static void _expr_primary(struct mangle *mangle)
   }
 }
 
+static void _expression(struct mangle *mangle)
+{
+  if (peek(mangle, "fp") && (*(mangle->mpos + 2) == '_' || isdigit(*(mangle->mpos + 2)))) {
+    mangle->mpos += 2;
+    long index = 0;
+    if (isdigit(*mangle->mpos))
+      index = strtol(mangle->mpos, (char**)&mangle->mpos, 10) + 1;
+    expect(mangle, "_");
+    char field[32];
+    sprintf(field, "{parm#%d}", index);
+    append(mangle, field);
+  } else if (isdigit(*mangle->mpos)) {
+    _source_name(mangle);
+  } else if (peek(mangle, "S") && (isdigit(mangle->mpos[1]) || isupper(mangle->mpos[1]) || mangle->mpos[1]== '_')) {
+    _substitution(mangle);
+  } else if (peek(mangle, "T") && (isdigit(mangle->mpos[1]) || mangle->mpos[1] == '_')) {
+    _template_param(mangle);
+  } else if (peek(mangle, "L")) {
+    _expr_primary(mangle);
+  } else if (is_operator(mangle) >= 0) {
+    int index = is_operator(mangle);
+    mangle->mpos += strlen(operators[index].abbrev);
+    if (operators[index].operands == 1) {
+      append(mangle, operators[index].name);
+      _expression(mangle);
+    } else if (operators[index].operands == 2) {
+      _expression(mangle);
+      append(mangle, operators[index].name);
+      _expression(mangle);
+    } else {
+      assert(operators[index].operands == 0 || operators[index].operands == 3);
+      //???
+    }
+  } else {
+    mangle->valid = false;
+  }
+}
+
+static void _decltype(struct mangle *mangle)
+{
+  /* <decltype>  ::= Dt <expression> E  # decltype of an id-expression or class member access
+                     DT <expression> E  # decltype of an expression
+
+   */
+  assert(mangle != NULL);
+  if (!match(mangle, "Dt"))
+    expect(mangle, "DT");
+  if (mangle->valid) {
+    append(mangle, "decltype(");
+    _expression(mangle);
+    append(mangle, ")");
+    expect(mangle, "E");
+  }
+}
+
 static void _nested_name(struct mangle *mangle)
 {
   /* <nested-name> ::= N [<CV-qualifiers>] [<ref-qualifier>] <prefix> <name-param>* E
 
      <prefix> ::= <unqualified-name> <abi-tag*> # global class or namespace
               ::= <decltype>                # decltype qualifier
-              ::= <template-param>          # template parameter (T_, T0_, etc.)
               ::= <substitution>
+              ::= <template-param>          # template parameter (T_, T0_, etc.)
 
      <name-param> ::= <unqualified-name>    # nested class or namespace (left-recursion!)
                   ::= <template-arg>*       # <template-prefix> class template specialization
@@ -1469,6 +1530,9 @@ static void _type(struct mangle *mangle)
     } else if (match(mangle, "Dp")) {
       mangle->pack_expansion = true;
       _template_param(mangle);
+    } else if (peek(mangle, "Dt") || peek(mangle, "DT")) {
+      _decltype(mangle);
+      add_substitution(mangle, mark, 0);
     } else if (isdigit(*mangle->mpos) || (*mangle->mpos == 'u' && isdigit(*(mangle->mpos + 1)))) {
       if (*mangle->mpos == 'u')
         mangle->mpos += 1;  /* ignore "vendor-extended" type (N.B. Itanium ABI uses upper-case 'U', but c++filt only accepts lower-case 'u') */
@@ -1486,7 +1550,7 @@ static void _function_encoding(struct mangle *mangle)
 {
   _name(mangle);
 
-  if (on_sentinel(mangle) || (mangle->nest > 0 && match(mangle, "E"))) {
+  if (on_sentinel(mangle) || (mangle->nest > 0 && peek(mangle, "E"))) {
     if (mangle->func_nest > 0)
       mangle->valid = false;
     return;

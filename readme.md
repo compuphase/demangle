@@ -10,10 +10,7 @@ The library is written in plain C with C99 extensions.
 
 ## Work in progress
 
-The current state of the library has the following known deficiencies:
-
-* No support for expressions; literals are handled, but operations on the literals are not.
-* No support for decltype().
+The current state of the library has had only minimal testing for demangling of <expression> blocks (e.g. within `decltype` specifications). Ternary expressions and parameter lists inside such expressions are currently not handled. A few more (special) operators may be missing.
 
 ## Usage
 
@@ -27,7 +24,7 @@ The function returns 0 (zero) on failure, and 1 on success.
 
 ## Limitations
 
-* Only Itanium ABI (no support for Microsoft Visual C/C++).
+* Only Itanium ABI (no support for Microsoft Visual C/C++). More specifically, it focusses on GCC and clang.
 * Only C++ (no Java, Rust, ...).
 * No support for an extra leading underscore; if you have a compiler that prefixes every symbol with an underscore, you ought to skip it before calling the `demangle` function. (A leading underscore on every symbol is common on COFF files, but not on ELF).
 
@@ -37,7 +34,7 @@ The canonical implementation for name demangling is `cp-demangle`, originally fr
 
 The reason I decided to make my own, is the license: `cp-demangle` is GPL. While I release my demangle library as open-source, I want to be able to use it in commercial projects as well.
 
-As an aside, I used the test file for `cp-demangle`, but did not look at the source code. I therefore consider this code a clean-room implementation.
+As an aside, for testing, I used many of the tests in the file `demangle-expected.txt`, which is part of the `cp-demangle` project. However, I did not look at the source code for `cp-demangle`. I therefore consider this code a clean-room implementation.
 
 ## Background information
 

@@ -120,6 +120,11 @@ int main(int argc,char *argv[])
   test("_ZStlsISt11char_traitsIcEERSt13basic_ostreamIcT_ES5_PKc@@GLIBCXX_3.4", "std::basic_ostream<char,std::char_traits<char> >& std::operator<< <std::char_traits<char> >(std::basic_ostream<char,std::char_traits<char> >&,char const*)");
   test("_Z1gIJidEEvDpT_", "void g<int,double>(int,double)");
   test("_Z1gIidEvDpT_", "void g<int,double>((int)...)");
+  test("_Z1fI1SENDtfp_E4typeET_", "decltype({parm#0})::type f<S>(S)");
+  test("_Z1fI1AEDtdtfp_srT_1xES1_", "decltype({parm#0}.A::x) f<A>(A)");
+  test("_Z3addIidEDTplL_Z1gEfp0_ET_T0_", "decltype(g+{parm#1}) add<int,double>(int,double)");
+  test("_Z1fIJPiPfPdEEvDpT_", "void f<int*,float*,double*>(int*,float*,double*)");
+  test("_ZngILi42EEvN1AIXplT_Li2EEE1TE", "void operator-<42>(A<42+2>::T)");
   test("_Z1fIT_EvT_", "failed");
   test("_Z20instantiate_with_intI3FooET_IiEv", "Foo<int> instantiate_with_int<Foo>()");
   test("_Z3fooISt6vectorIiEEvv", "void foo<std::vector<int> >()");
