@@ -10,7 +10,7 @@ The library is written in plain C with C99 extensions.
 
 ## Work in progress
 
-The current state of the library has had only minimal testing for demangling of <expression> blocks (e.g. within `decltype` specifications). Ternary expressions and parameter lists inside such expressions are currently not handled. A few more (special) operators may be missing.
+The current state of the library has had only minimal testing for demangling of &lt;expression&gt; blocks (e.g. within `decltype` specifications). Ternary expressions and parameter lists inside such expressions are currently not handled. A few more (special) operators may be missing.
 
 ## Usage
 
