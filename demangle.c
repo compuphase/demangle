@@ -510,12 +510,16 @@ static void add_substitution(struct mangle *mangle, const char *text, int tpl)
       if (mangle->subst_count < MAX_TEMPLATE_SUBST) {
         mangle->tpl_work[mangle->tpl_work_count] = str;
         mangle->tpl_work_count += 1;
+      } else {
+        free((void*)str);
       }
     } else {
       assert(mangle->subst_count < MAX_SUBSTITUTIONS);
       if (mangle->subst_count < MAX_SUBSTITUTIONS) {
         mangle->substitions[mangle->subst_count] = str;
         mangle->subst_count += 1;
+      } else {
+        free((void*)str);
       }
     }
   }
@@ -1207,7 +1211,7 @@ static void _expression(struct mangle *mangle)
       index = strtol(mangle->mpos, (char**)&mangle->mpos, 10) + 1;
     expect(mangle, "_");
     char field[32];
-    sprintf(field, "{parm#%d}", index);
+    sprintf(field, "{parm#%ld}", index);
     append(mangle, field);
   } else if (isdigit(*mangle->mpos)) {
     _source_name(mangle);
