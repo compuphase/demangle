@@ -30,7 +30,7 @@ The function returns 0 (zero) on failure, and 1 on success.
 
 ## Why build my own
 
-The canonical implementation for name demangling is `cp-demangle`, originally from the `libiberty` project. While I read the story of how the [early releases of this code were riddled with bugs](https://fitzgeraldnick.com/2017/02/22/cpp-demangle.html), those were the early versions. The *current* version is probably the most field-tested demangler for GNU C++.
+The canonical implementation for name demangling is `cp-demangle`, originally from the `libiberty` project. While I read the story of how the [early releases of cp-demangle were riddled with bugs](https://fitzgeraldnick.com/2017/02/22/cpp-demangle.html), those were the early versions. The *current* version is probably the most field-tested demangler for GNU C++.
 
 The reason I decided to make my own, is the license: `cp-demangle` is GPL. While I release my demangle library as open-source, I want to be able to use it in commercial projects as well.
 
