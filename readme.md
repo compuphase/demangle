@@ -1,6 +1,6 @@
 # Demangle
 
-This library implements C++ name demangling for GNU GCC. GNU conforms to the name mangling scheme of the [Itanium C++ ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling).
+This module implements C++ name demangling for GNU GCC. GNU conforms to the name mangling scheme of the [Itanium C++ ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling).
 
 The library is written in plain C with C99 extensions.
 
@@ -16,11 +16,11 @@ The current state of the library has had only minimal testing for demangling of 
 
 There is a single function:
 
-    int demangle(char *plain, size_t size, const char *mangled);
+    bool demangle(char *plain, size_t size, const char *mangled);
 
 The first parameter, `plain`, is the output (demangled string); the second parameter is the size of this buffer. The third parameter, `mangled`, is the input string.
 
-The function returns 0 (zero) on failure, and 1 on success.
+The function returns `true` on success, and `false` on failure.
 
 ## Limitations
 
