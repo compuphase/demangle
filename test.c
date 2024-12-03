@@ -106,8 +106,8 @@ int main(int argc,char *argv[])
   test("_Z5outerPFsiEl", "outer(short(*)(int),long)");
   test("_Z3fooIA3_iEvRKT_", "void foo<int[3]>(int(&)[3] const)");
   test("_Z3fooIPA3_iEvRKT_", "void foo<int(*)[3]>(int(*&)[3] const)");
-  test("_ZZ3BBdI3FooEvvENK3Fob3FabEv", "void BBd<Foo>()::Fob::Fab() const");
-  test("_ZZZ3BBdI3FooEvvENK3Fob3FabEvENK3Gob3GabEv", "void BBd<Foo>()::Fob::Fab() const::Gob::Gab() const");
+  test("_ZZ3BBdI3FooEvvENK3Fob3FabEv", "BBd<Foo>()::Fob::Fab() const");
+  test("_ZZZ3BBdI3FooEvvENK3Fob3FabEvENK3Gob3GabEv", "BBd<Foo>()::Fob::Fab() const::Gob::Gab() const");
   test("_ZNK5boost6spirit5matchI13rcs_deltatextEcvMNS0_4impl5dummyEFvvEEv", "boost::spirit::match<rcs_deltatext>::operator void (boost::spirit::impl::dummy::*)()() const");
   test("_ZNK1C1fIiEEPFivEv", "int(*C::f<int>() const)()");
   test("_ZZN7myspaceL3foo_1EvEN11localstruct1fEZNS_3fooEvE16otherlocalstruct", "myspace::foo()::localstruct::f(myspace::foo()::otherlocalstruct)");
@@ -142,19 +142,24 @@ int main(int argc,char *argv[])
   test("_ZN2Ty6methodIS_EEvMT_FvPKcES4_", "void Ty::method<Ty>(void (Ty::*)(char const*),void(char const*))");
   test("_ZN2Ty6methodIS_EEvMT_FvPKcES5_", "void Ty::method<Ty>(void (Ty::*)(char const*),void (Ty::*)(char const*))");
   test("_ZNK1fB5cxx11Ev", "f[abi:cxx11]() const");
-  test("_ZUlvE_", "{lambda()}");
-  test("_ZUlisE_", "{lambda(int,short)}");
-  test("_ZZ3aaavEUlvE_", "aaa()::{lambda()}");
-  test("_ZZ3aaavENUlvE_3bbbE", "aaa()::{lambda()}::bbb");
-  test("_ZN3aaaUlvE_D1Ev", "aaa::{lambda()}::~{lambda()}()");
+  test("_ZUlvE_", "{lambda()#1}");
+  test("_ZUlisE_", "{lambda(int,short)#1}");
+  test("_ZZ3aaavEUlvE_", "aaa()::{lambda()#1}");
+  test("_ZZ3aaavENUlvE_3bbbE", "aaa()::{lambda()#1}::bbb");
+  test("_ZN3aaaUlvE_D1Ev", "aaa::{lambda()#1}::~aaa()");
   test("_ZZ3aaavEN3bbbD1Ev", "aaa()::bbb::~bbb()");
-  test("_ZZ3aaavENUlvE_D1Ev", "aaa()::{lambda()}::~{lambda()}()");
+  test("_ZZ3aaavENUlvE_D1Ev", "aaa()::{lambda()#1}::~aaa()");
   test("_Z3fooILb0EEvi", "void foo<false>(int)");
   test("_Z3fooILb1EEvi", "void foo<true>(int)");
   test("_Z3fooILb2EEvi", "void foo<(bool)2>(int)");
   test("_ZN6WebKit25WebCacheStorageConnection17didReceiveMessageERN3IPC10ConnectionERNS1_7DecoderE", "WebKit::WebCacheStorageConnection::didReceiveMessage(IPC::Connection&,IPC::Decoder&)");
   test("_ZN3IPC10Connection15dispatchMessageESt10unique_ptrINS_7DecoderESt14default_deleteIS2_EE", "IPC::Connection::dispatchMessage(std::unique_ptr<IPC::Decoder,std::default_delete<IPC::Decoder> >)");
   test("_ZNK1QssERKS_", "Q::operator<=>(Q const&) const");
+  test("_ZNSt17_Function_handlerIFviEN3JPH19JobSystemThreadPool19mThreadInitFunctionMUliE_EE9_M_invokeERKSt9_Any_dataOi", "std::_Function_handler<void(int),JPH::JobSystemThreadPool::mThreadInitFunction::{lambda(int)#1}>::_M_invoke(std::_Any_data const&,int&&)");
+  test("_ZZZ1fILb0EJiiEEvvENKUlvE_clEvE1n", "f<false,int,int>()::{lambda()#1}::operator()() const::n");
+  test("_ZZZ1fILb0EJiiEEvvENKUlvE0_clEvE1n", "f<false,int,int>()::{lambda()#2}::operator()() const::n");
+
+  printf("\nAll tests passed.\n");
   return 0;
 }
 

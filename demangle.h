@@ -1,6 +1,9 @@
 /* GNU C++ symbol name demangler
  *
- * Copyright 2022, CompuPhase
+ * This decoding module follows the specification of the Itanium C++ ABI,
+ * documented at: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
+ *
+ * Copyright 2022-2024, CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +20,8 @@
 #ifndef _DEMANGLE_H
 #define _DEMANGLE_H
 
-int demangle(char *plain, size_t size, const char *mangled);
+#include <stdbool.h>
+
+bool demangle(char *plain, size_t size, const char *mangled);
 
 #endif /* _DEMANGLE_H */

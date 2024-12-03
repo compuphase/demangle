@@ -1,6 +1,9 @@
 /* GNU C++ symbol name demangler
  *
- * Copyright 2022, CompuPhase
+ * This decoding module follows the specification of the Itanium C++ ABI,
+ * documented at: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
+ *
+ * Copyright 2022-2024, CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +18,17 @@
  * limitations under the License.
  */
 #include <assert.h>
-#include <alloca.h>
 #include <ctype.h>
-#include <stdbool.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "demangle.h"
 
 #if defined _MSC_VER
-  #define alloca(a)   _alloca(a)
+# define alloca(a)   _alloca(a)
+#elif defined __linux__
+# include <alloca.h>
 #endif
 
 #define sizearray(a)        (sizeof(a) / sizeof((a)[0]))
@@ -490,14 +494,14 @@ static void add_substitution(struct mangle *mangle, const char *text, int tpl)
 
   /* duplicate substitutions are not merged (the Itanium ABI documentation
      implies that they are) */
-  #if 0
+# if 0
     if (!tpl) {
       for (int i = 0; i < mangle->subst_count; i++) {
         if (strcmp(text, mangle->substitions[i]) == 0)
           return; /* substition already exists, do not add again */
       }
     }
-  #endif
+# endif
 
   size_t length = strlen(text);
   char *str = malloc((length + 1) * sizeof(char));
@@ -596,7 +600,7 @@ static void _extended_qualifier(struct mangle *mangle)
   assert(mangle != NULL);
   if (match(mangle, "U")) {
     /* find the end of extended-qualifiers */
-    #define MAX_EXTQ  10
+#   define MAX_EXTQ  10
     char *base = current_position(mangle);
     const char *mpos_stack[MAX_EXTQ];
     int count = 0;
@@ -822,10 +826,15 @@ static void _closure_type(struct mangle *mangle)
       count++;
     }
     expect(mangle, "E");
-    while (isdigit(*mangle->mpos))
+    int sequence = 1;
+    while (isdigit(*mangle->mpos)) {
+      sequence = *mangle->mpos - '0' + 2;
       mangle->mpos += 1;
+    }
+    char field[10];
+    sprintf(field, ")#%d}", sequence);
+    append(mangle, field);
     expect(mangle, "_");
-    append(mangle, ")}");
   }
 }
 
@@ -882,7 +891,7 @@ static void _array(struct mangle *mangle)
   assert(mangle != NULL);
   if (expect(mangle, "A")) {
     /* collect & skip the array specifications (without parsing them) */
-    #define MAX_ARRAYDIM  10
+#   define MAX_ARRAYDIM  10
     const char *mpos_stack[MAX_ARRAYDIM];
     int count = 0;
     do {
@@ -1049,15 +1058,31 @@ static void _ctor_dtor_name(struct mangle *mangle)
     const char *tail = mangle->plain + strlen(mangle->plain);
     if (tail > mangle->plain + 2 && *(tail - 1) == ':' && *(tail - 2) == ':')
       tail -= 2;
+    bool goback = true;
     const char *head = tail;
     /* find start of class name */
     if (head != mangle->plain && *(head - 1) == '}') {
       head = find_matching(mangle->plain, head - 1, '}');
       assert(head != NULL);
-    } else {
-      while (head != mangle->plain && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1)== '_'))
-        head -= 1;
+      if (head >= mangle->plain + 3 && *(head - 1) == ':' && *(head - 2) == ':'
+          && (isalpha(*(head - 3)) || isdigit(*(head - 3)) || *(head - 3)== '_' || *(head - 3)== ')')) {
+        head -= 2;
+        tail = head;
+      } else {
+        goback = false;
+      }
     }
+    if (goback && head >= mangle->plain + 1 && *(head - 1) == ')') {
+      head = find_matching(mangle->plain, head - 1, ')');
+      assert(head != NULL);
+      if (head > mangle->plain + 1 && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1)== '_'))
+        tail = head;
+      else
+        goback = false;
+    }
+    if (goback)
+      while (head != mangle->plain && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1) == '_'))
+        head -= 1;
     if (head == tail) {
       mangle->valid = false;
       return;
@@ -1066,11 +1091,12 @@ static void _ctor_dtor_name(struct mangle *mangle)
     char *cname = alloca((len + 1) * sizeof(char));
     memcpy(cname, head, len);
     cname[len] = '\0';
-    if (*tail != ':')
+    tail = mangle->plain + strlen(mangle->plain);
+    if (tail <= mangle->plain + 2 || *(tail - 1) != ':' || *(tail - 2) != ':')
       append(mangle, "::");
     assert(*mangle->mpos == 'C' || *mangle->mpos == 'D');
     if (*mangle->mpos == 'D')
-    append(mangle, "~");
+      append(mangle, "~");
     append(mangle, cname);
     mangle->mpos += 1;  /* skip 'C' or 'D' */
     if (*mangle->mpos == 'I')
@@ -1319,7 +1345,8 @@ static void _nested_name(struct mangle *mangle)
     int sentinel = 0;
     do {
       if (peek(mangle, "M")) {
-        continue; /* closure type, ignore */
+        mangle->mpos += 1;
+        continue;               /* closure type, ignore */
       } else if (peek(mangle, "I")) {
         _template_args(mangle);
       } else {
@@ -1603,8 +1630,8 @@ static void _function_encoding(struct mangle *mangle)
   if (mangle->nest == 0)
     _qualifier_post(mangle, mangle->qualifiers);
 
-  /* prefix function type (saved earlier) */
-  if (type_string != NULL) {
+  /* prefix function type (saved earlier), but only for the outer nesting */
+  if (type_string != NULL && on_sentinel(mangle)) {
     assert(type_ins_point <= strlen(type_string));
     if (type_ins_point == strlen(type_string)) {
       strcat(type_string, " ");
@@ -1643,7 +1670,7 @@ static void _encoding(struct mangle *mangle)
   }
 }
 
-int demangle(char *plain, size_t size, const char *mangled)
+bool demangle(char *plain, size_t size, const char *mangled)
 {
   assert(plain != NULL);
   assert(size > 0);
@@ -1653,7 +1680,7 @@ int demangle(char *plain, size_t size, const char *mangled)
                        _Z <encoding> . <vendor-specific suffix>   #not currently handled
    */
   if (mangled[0] != '_' || mangled[1] != 'Z')
-    return 0;
+    return false;
 
   struct mangle mangle;
   mangle.plain = plain;
