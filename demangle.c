@@ -50,10 +50,10 @@ struct mangle {
   char *parameter_base[MAX_FUNC_NESTING];
   char *substitions[MAX_SUBSTITUTIONS];
   size_t subst_count;
-  char *tpl_subst[MAX_TEMPLATE_SUBST];  /* lookup table */
+  char *tpl_subst[MAX_TEMPLATE_SUBST];  /**< lookup table */
   size_t tpl_subst_count;
-  char *tpl_work[MAX_TEMPLATE_SUBST];   /* work table, while parsing a template */
-  size_t tpl_work_count;
+  char *tpl_parse[MAX_TEMPLATE_SUBST];  /**< work table, while parsing a template */
+  size_t tpl_parse_count;
 };
 
 static int is_operator(struct mangle *mangle);
@@ -62,7 +62,7 @@ static int is_abbreviation(struct mangle *mangle);
 static bool is_ctor_dtor_name(struct mangle *mangle);
 
 static bool _abi_tags(struct mangle *mangle);
-static void _template_args(struct mangle *mangle);
+static bool _template_args(struct mangle *mangle);
 static void _template_args_pack(struct mangle *mangle);
 static void _source_name(struct mangle *mangle);
 static void _unqualified_name(struct mangle *mangle);
@@ -222,6 +222,36 @@ static int expect(struct mangle *mangle, const char *keyword)
   assert(mangle != NULL);
   if (mangle->valid && !match(mangle, keyword))
     mangle->valid = false;
+  return mangle->valid;
+}
+
+static int expect_number(struct mangle *mangle, char sentinel, long *value)
+{
+  assert(mangle != NULL);
+  if (mangle->valid) {
+    int negate = 0;
+    if (*mangle->mpos == 'n') {
+      negate = 1;
+      mangle->mpos += 1;
+    }
+    char *ptr;
+    long v = strtol(mangle->mpos, &ptr, 10);
+    if (ptr == mangle->mpos || v < 0) {
+      mangle->valid=false;
+    } else {
+      mangle->mpos = ptr;
+      if (negate)
+        v = -v;
+      if (value != NULL)
+        *value = v;
+    }
+    if (sentinel != '\0') {
+      if (*mangle->mpos == sentinel)
+        mangle->mpos += 1;
+      else
+        mangle->valid = false;
+    }
+  }
   return mangle->valid;
 }
 
@@ -510,10 +540,10 @@ static void add_substitution(struct mangle *mangle, const char *text, int tpl)
     str[length] = '\0';
     if (tpl) {
       /* insert in the work table */
-      assert(mangle->tpl_work_count < MAX_TEMPLATE_SUBST);
+      assert(mangle->tpl_parse_count < MAX_TEMPLATE_SUBST);
       if (mangle->subst_count < MAX_TEMPLATE_SUBST) {
-        mangle->tpl_work[mangle->tpl_work_count] = str;
-        mangle->tpl_work_count += 1;
+        mangle->tpl_parse[mangle->tpl_parse_count] = str;
+        mangle->tpl_parse_count += 1;
       } else {
         free((void*)str);
       }
@@ -539,13 +569,13 @@ static void tpl_subst_swap(struct mangle *mangle)
     mangle->tpl_subst[i] = NULL;
   }
   /* copy the work table into the look-up table */
-  for (size_t i = 0; i < mangle->tpl_work_count; i++) {
-    assert(mangle->tpl_work[i] != NULL);
-    mangle->tpl_subst[i] = mangle->tpl_work[i];
-    mangle->tpl_work[i] = NULL;
+  for (size_t i = 0; i < mangle->tpl_parse_count; i++) {
+    assert(mangle->tpl_parse[i] != NULL);
+    mangle->tpl_subst[i] = mangle->tpl_parse[i];
+    mangle->tpl_parse[i] = NULL;
   }
-  mangle->tpl_subst_count = mangle->tpl_work_count;
-  mangle->tpl_work_count = 0;
+  mangle->tpl_subst_count = mangle->tpl_parse_count;
+  mangle->tpl_parse_count = 0;
 }
 
 /** _qualifier_pre() handles <cv-qualifier> plus optionally <ref-qualifier>, but
@@ -626,7 +656,7 @@ static void _extended_qualifier(struct mangle *mangle)
 
 static bool _abi_tags(struct mangle *mangle)
 {
-  /* <abi-tag> := B <source-name>   # right-to-left associative
+  /* <abi-tag> := B <source-name>               # right-to-left associative
    */
   assert(mangle != NULL);
   int count = 0;
@@ -640,38 +670,51 @@ static bool _abi_tags(struct mangle *mangle)
   return count > 0;
 }
 
-static void _template_args(struct mangle *mangle)
+static bool _template_args(struct mangle *mangle)
 {
   /* <template-args> ::= I <template-arg>* E
 
-     <template-arg> ::= J <template-arg>* E   # argument pack
-                        X <expression> E      # expression
-                        <expr-primary>        # simple expressions
+     <template-arg> ::= J <template-arg>* E     # argument pack
+                        X <expression> E        # expression
+                        <expr-primary>          # simple expressions
                         <type>
   */
   assert(mangle != NULL);
-  if (match(mangle, "I")) {
-    append(mangle, "<");
-    int count = 0;
-    while (mangle->valid && !match(mangle, "E")) {
-      if (count++ > 0)
-        append(mangle, ",");
-      char *mark = current_position(mangle);
-      if (peek(mangle, "J")) {
-        _template_args_pack(mangle);
-      } else if (match(mangle, "X")) {
-        _expression(mangle);
-        expect(mangle, "E");
-      } else if (peek(mangle, "L")) {
-        _expr_primary(mangle);
-      } else {
-        _type(mangle);
-      }
-      add_substitution(mangle, mark, 1);
+  if (!match(mangle, "I"))
+    return false;
+
+  /* save a copy of the current parse list, for nested template declarations */
+  int save_parse_count = mangle->tpl_parse_count;
+  char *save_parse[MAX_TEMPLATE_SUBST];
+  assert(sizeof mangle->tpl_parse == sizeof save_parse);
+  memcpy(save_parse, mangle->tpl_parse, sizeof save_parse);
+  mangle->tpl_parse_count = 0;
+
+  append(mangle, "<");
+  int count = 0;
+  while (mangle->valid && !match(mangle, "E")) {
+    if (count++ > 0)
+      append(mangle, ",");
+    char *mark = current_position(mangle);
+    if (peek(mangle, "J")) {
+      _template_args_pack(mangle);
+    } else if (match(mangle, "X")) {
+      _expression(mangle);
+      expect(mangle, "E");
+    } else if (peek(mangle, "L")) {
+      _expr_primary(mangle);
+    } else {
+      _type(mangle);
     }
-    append(mangle, ">");
-    tpl_subst_swap(mangle); /* swap any previous (or nested) template parameters by the new ones */
+    add_substitution(mangle, mark, 1);
   }
+  append(mangle, ">");
+
+  tpl_subst_swap(mangle); /* swap any previous (or nested) template parameters by the new ones */
+  memcpy(mangle->tpl_parse, save_parse, sizeof save_parse);
+  mangle->tpl_parse_count = save_parse_count;
+
+  return true;
 }
 
 static void _template_args_pack(struct mangle *mangle)
@@ -708,7 +751,7 @@ static void _discriminator(struct mangle *mangle)
 
 static void _source_name(struct mangle *mangle)
 {
-  /* <source-name> ::= <number> <character>+      #string with length prefix
+  /* <source-name> ::= <number> <character>+    #string with length prefix
    */
   assert(mangle != NULL);
   if (mangle->valid) {
@@ -866,7 +909,7 @@ static void _pointer_to_member_type(struct mangle *mangle)
     char *classtype = alloca((len + 10) * sizeof(char));  /* add some space, because of characters concatenated */
     strcpy(classtype, mark);
     strcat(classtype, "::*");
-    *mark = '\0'; /* resture plain string */
+    *mark = '\0';   /* restore plain string */
     /* member type */
     _type(mangle);  /* member type */
     /* check for parentheses (function pointer) */
@@ -978,7 +1021,7 @@ static void _substitution(struct mangle *mangle)
 
 static void _template_param(struct mangle *mangle)
 {
-  /* <template-param> ::= T_ # first template parameter
+  /* <template-param> ::= T_                    # first template parameter
                           T <parameter-2 non-negative number> _
    */
   assert(mangle != NULL);
@@ -1044,14 +1087,14 @@ static bool is_ctor_dtor_name(struct mangle *mangle)
 
 static void _ctor_dtor_name(struct mangle *mangle)
 {
-  /* <ctor-dtor-name> ::= C1            # complete object constructor
-                          C2            # base object constructor
-                          C3            # complete object allocating constructor
+  /* <ctor-dtor-name> ::= C1                    # complete object constructor
+                          C2                    # base object constructor
+                          C3                    # complete object allocating constructor
                           CI1 <base class type> # complete object inheriting constructor
                           CI2 <base class type> # base object inheriting constructor
-                          D0            # deleting destructor
-                          D1            # complete object destructor
-                          D2            # base object destructor
+                          D0                    # deleting destructor
+                          D1                    # complete object destructor
+                          D2                    # base object destructor
    */
   assert(mangle != NULL);
   if (mangle->valid) {
@@ -1072,8 +1115,8 @@ static void _ctor_dtor_name(struct mangle *mangle)
         goback = false;
       }
     }
-    if (goback && head >= mangle->plain + 1 && *(head - 1) == ')') {
-      head = find_matching(mangle->plain, head - 1, ')');
+    if (goback && head >= mangle->plain + 1 && (*(head - 1) == ')' || *(head - 1) == '>')) {
+      head = find_matching(mangle->plain, head - 1, *(head - 1));
       assert(head != NULL);
       if (head > mangle->plain + 1 && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1)== '_'))
         tail = head;
@@ -1268,8 +1311,8 @@ static void _expression(struct mangle *mangle)
 
 static void _decltype(struct mangle *mangle)
 {
-  /* <decltype>  ::= Dt <expression> E  # decltype of an id-expression or class member access
-                     DT <expression> E  # decltype of an expression
+  /* <decltype>  ::= Dt <expression> E          # decltype of an id-expression or class member access
+                     DT <expression> E          # decltype of an expression
 
    */
   assert(mangle != NULL);
@@ -1288,13 +1331,13 @@ static void _nested_name(struct mangle *mangle)
   /* <nested-name> ::= N [<CV-qualifiers>] [<ref-qualifier>] <prefix> <name-param>* E
 
      <prefix> ::= <unqualified-name> <abi-tag*> # global class or namespace
-              ::= <decltype>                # decltype qualifier
+              ::= <decltype>                    # decltype qualifier
               ::= <substitution>
-              ::= <template-param>          # template parameter (T_, T0_, etc.)
+              ::= <template-param>              # template parameter (T_, T0_, etc.)
 
-     <name-param> ::= <unqualified-name>    # nested class or namespace (left-recursion!)
-                  ::= <template-arg>*       # <template-prefix> class template specialization
-                  ::= M                     # <closure-prefix> initializer of a variable or data member
+     <name-param> ::= <unqualified-name>        # nested class or namespace (left-recursion!)
+                  ::= <template-arg>*           #   <template-prefix> class template specialization
+                  ::= M                         # <closure-prefix> initializer of a variable or data member
    */
   assert(mangle != NULL);
   if (expect(mangle, "N")) {
@@ -1455,7 +1498,7 @@ static int is_builtin_type(struct mangle *mangle)
 static void _type(struct mangle *mangle)
 {
   /* <type> ::= <builtin-type>
-                <cv-qualifier>+ <type>  # qualifier is appended at the end
+                <cv-qualifier>+ <type>          # qualifier is appended at the end
                 <function-type>
                 <class-enum-type>
                 <array-type>
@@ -1466,13 +1509,13 @@ static void _type(struct mangle *mangle)
                 <decltype>
                 <nested-name>
                 <local-name>
-                Dp <type>         # pack expansion
-                P <type>          # pointer
-                R <type>          # l-value reference
-                O <type>          # r-value reference (C++11)
-                C <type>          # complex pair (C99)
-                G <type>          # imaginary (C99)
-                L <type> <value>  # literal
+                Dp <type>                       # pack expansion
+                P <type>                        # pointer
+                R <type>                        # l-value reference
+                O <type>                        # r-value reference (C++11)
+                C <type>                        # complex pair (C99)
+                G <type>                        # imaginary (C99)
+                L <type> <value>                # literal
 
      <vector-type> ::= Dv <number> _ <type>
                    ::= Dv _ <expression> _ <type>
@@ -1482,9 +1525,9 @@ static void _type(struct mangle *mangle)
                         V    # volatile
                         K    # const
 
-     <exception-spec> ::= Do                  # noexcept
-                          DO <expression> E   # noexcept(...)
-                          Dw <type>+ E        # throw(type, ...)
+     <exception-spec> ::= Do                    # noexcept
+                          DO <expression> E     # noexcept(...)
+                          Dw <type>+ E          # throw(type, ...)
    */
   assert(mangle != NULL);
   if (mangle->valid) {
@@ -1527,7 +1570,10 @@ static void _type(struct mangle *mangle)
       add_substitution(mangle, mark, 0);
     } else if (match(mangle, "O")) {
       _type(mangle);
-      append(mangle, "&&");
+      assert(strlen(mangle->plain) > 0);
+      const char *p = mangle->plain + strlen(mangle->plain) - 1;
+      if (*p != '&')            /* don't add r-value reference for types that are already references */
+        append(mangle, "&&");
       add_substitution(mangle, mark, 0);
     } else if (is_abbreviation(mangle) >= 0) {
       int i = is_abbreviation(mangle);
@@ -1536,14 +1582,12 @@ static void _type(struct mangle *mangle)
       mangle->mpos += 2;
       append(mangle, abbreviations[i].name);
       if (i == 0) {
-        append(mangle, "::"); /* special case for std:: */
+        append(mangle, "::");   /* special case for std:: */
         _unqualified_name(mangle);
         add_substitution(mangle, mark, 0);
       }
-      if (peek(mangle, "I")) {
-        _template_args(mangle);
+      if (_template_args(mangle))
         add_substitution(mangle, mark, 0);
-      }
     } else if (peek(mangle, "S") && (isdigit(mangle->mpos[1]) || isupper(mangle->mpos[1]) || mangle->mpos[1]== '_')) {
       _substitution(mangle);
       _template_args(mangle);
@@ -1560,7 +1604,7 @@ static void _type(struct mangle *mangle)
       _expr_primary(mangle);
     } else if (match(mangle, "Dp")) {
       mangle->pack_expansion = true;
-      _template_param(mangle);
+      _type(mangle);
     } else if (peek(mangle, "Dt") || peek(mangle, "DT")) {
       _decltype(mangle);
       add_substitution(mangle, mark, 0);
@@ -1569,7 +1613,8 @@ static void _type(struct mangle *mangle)
         mangle->mpos += 1;  /* ignore "vendor-extended" type (N.B. Itanium ABI uses upper-case 'U', but c++filt only accepts lower-case 'u') */
       _source_name(mangle);
       add_substitution(mangle, mark, 0);
-      _template_args(mangle);
+      if (_template_args(mangle))
+        add_substitution(mangle, mark, 0);
     } else {
       mangle->valid = false;
       return;
@@ -1646,11 +1691,13 @@ static void _function_encoding(struct mangle *mangle)
 
 static void _encoding(struct mangle *mangle)
 {
-  /* <encoding> ::= <name> [J]<type>* # type list is present for functions, absent for variables
-                    TV <type>         # vtable
-                    TT <type>         # vtable index
-                    TI <type>         # typeinfo struct
-                    TS <type>         # typeinfo name
+  /* <encoding> ::= <name> [J]<type>*           # type list is present for functions, absent for variables
+                    TV <type>                   # vtable
+                    TT <type>                   # vtable index
+                    TI <type>                   # typeinfo struct
+                    TS <type>                   # typeinfo name
+                    Th <number> _ <encoding>    # non-virtual override thunk
+                    Tv <number> _ <number> _ <encoding>   # virtual override thunk
   */
   assert(mangle != NULL);
   if (match(mangle, "TV")) {
@@ -1665,6 +1712,15 @@ static void _encoding(struct mangle *mangle)
   } else if (match(mangle, "TS")) {
     append(mangle, "typeinfo name for ");
     _type(mangle);
+  } else if (match(mangle, "Th")) {
+    append(mangle, "non-virtual thunk to ");
+    expect_number(mangle, '_', NULL);
+    _encoding(mangle);
+  } else if (match(mangle, "Tv")) {
+    append(mangle, "virtual thunk to ");
+    expect_number(mangle, '_', NULL);
+    expect_number(mangle, '_', NULL);
+    _encoding(mangle);
   } else {
     _function_encoding(mangle);
   }
@@ -1692,8 +1748,8 @@ bool demangle(char *plain, size_t size, const char *mangled)
   mangle.subst_count = 0;
   memset(mangle.tpl_subst, 0, MAX_TEMPLATE_SUBST * sizeof(char*));
   mangle.tpl_subst_count = 0;
-  memset(mangle.tpl_work, 0, MAX_TEMPLATE_SUBST * sizeof(char*));
-  mangle.tpl_work_count = 0;
+  memset(mangle.tpl_parse, 0, MAX_TEMPLATE_SUBST * sizeof(char*));
+  mangle.tpl_parse_count = 0;
   memset(mangle.parameter_base, 0, MAX_FUNC_NESTING * sizeof(char*));
   mangle.func_nest = 0;
   memset(mangle.qualifiers, 0, sizeof mangle.qualifiers);

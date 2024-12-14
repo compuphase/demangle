@@ -158,6 +158,12 @@ int main(int argc,char *argv[])
   test("_ZNSt17_Function_handlerIFviEN3JPH19JobSystemThreadPool19mThreadInitFunctionMUliE_EE9_M_invokeERKSt9_Any_dataOi", "std::_Function_handler<void(int),JPH::JobSystemThreadPool::mThreadInitFunction::{lambda(int)#1}>::_M_invoke(std::_Any_data const&,int&&)");
   test("_ZZZ1fILb0EJiiEEvvENKUlvE_clEvE1n", "f<false,int,int>()::{lambda()#1}::operator()() const::n");
   test("_ZZZ1fILb0EJiiEEvvENKUlvE0_clEvE1n", "f<false,int,int>()::{lambda()#2}::operator()() const::n");
+  test("_ZN7HashSetI5IVec29AllocatorE11AddInternalIRKS0_EEbiOT_bPNS2_4IterE", "bool HashSet<IVec2,Allocator>::AddInternal<IVec2 const&>(int,IVec2 const&,bool,HashSet<IVec2,Allocator>::Iter*)");
+  test("_ZThn24_N13ZipFileStreamD1Ev", "non-virtual thunk to ZipFileStream::~ZipFileStream()");
+  test("_ZTvn24_n24_N13ZipFileStreamD1Ev", "virtual thunk to ZipFileStream::~ZipFileStream()");
+  test("_Z9gCatTraceIJRA17_KciEEvi7CStrArgDpOT_", "void gCatTrace<char const(&)[17],int>(int,CStrArg,char const(&)[17],int&&)");
+  test("_ZN12HashMultiMapIPK4RTTIS2_9AllocatorED1Ev", "HashMultiMap<RTTI const*,RTTI const*,Allocator>::~HashMultiMap()");
+  test("_Z18gQuickSortInternalIPi4LessIiEEvRKT_S5_RKT0_Ri", "void gQuickSortInternal<int*,Less<int> >(int* const&,int* const&,Less<int> const&,int&)");
 
   printf("\nAll tests passed.\n");
   return 0;
